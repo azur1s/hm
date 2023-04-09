@@ -59,24 +59,21 @@ impl std::fmt::Display for Exp {
                 }
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        write!(f, " ")?;
                     }
                     write!(f, "{arg}")?;
                 }
                 write!(f, ")")
             },
             Lambda { args, ret, body } => {
-                write!(f, "fn (")?;
+                write!(f, "\\")?;
                 for (i, (arg, ty)) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
+                    if i > 0 { write!(f, " ")?; }
                     write!(f, "{arg}")?;
                     if let Some(ty) = ty {
                         write!(f, ": {ty}")?;
                     }
                 }
-                write!(f, ")")?;
                 if let Some(ret) = ret {
                     write!(f, ": {ret}")?;
                 }
@@ -158,21 +155,19 @@ impl std::fmt::Display for TExp {
                 }
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        write!(f, " ")?;
                     }
                     write!(f, "{arg}")?;
                 }
                 write!(f, ")")
             },
             Lambda { args, ret, body } => {
-                write!(f, "fn (")?;
+                write!(f, "\\")?;
                 for (i, (arg, ty)) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{arg}: {ty}")?;
+                    if i > 0 { write!(f, " ")?; }
+                    write!(f, "({arg}: {ty})")?;
                 }
-                write!(f, "): {ret} -> {body}")
+                write!(f, ": {ret} -> {body}")
             },
             Define { name, ty, value } => {
                 write!(f, "let {name}: {ty} = {value}")
@@ -229,11 +224,11 @@ impl std::fmt::Display for Type {
                 write!(f, "(")?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        write!(f, " ")?;
                     }
                     write!(f, "{arg}")?;
                 }
-                write!(f, ") -> {ret}")
+                write!(f, ") => {ret}")
             },
             Constructor { name, generics } => {
                 write!(f, "{name}")?;
@@ -595,6 +590,10 @@ impl Infer {
                 let t = ty.unwrap_or(self.fresh());
                 let vt = self.infer(*value, t.clone())?;
                 self.env.insert(name.clone(), t.clone());
+
+                // Define always returns unit
+                self.constraints.push((expected, Type::Unit));
+
                 Ok(TExp::Define {
                     name,
                     ty: t,
@@ -632,35 +631,6 @@ impl Infer {
             },
         }
     }
-
-    fn type_of(&mut self, te: TExp) -> Result<Type, String> {
-        match te {
-            TExp::Num(_) => Ok(Type::Num),
-            TExp::Bool(_) => Ok(Type::Bool),
-            TExp::Unit => Ok(Type::Unit),
-            TExp::Ident(x) => self.env.get(&x).cloned()
-                .ok_or(format!("Unbound variable: {}", x)),
-            TExp::Binary(_, _, _, t) => Ok(t),
-            TExp::Call { func, .. } => match *func {
-                TExp::Ident(x) => self.env.get(&x).cloned()
-                    .ok_or(format!("Unbound variable: {}", x)),
-                TExp::Lambda { ret, .. } => Ok(ret),
-                _ => unreachable!(),
-            },
-            TExp::Lambda { ret, .. } => Ok(ret),
-            TExp::Define { ty, .. } => Ok(ty),
-            TExp::Let { ty, .. } => Ok(ty),
-            TExp::If { ret, .. } => Ok(ret),
-        }
-    }
-}
-
-fn infer_expr(e: Exp) -> Result<TExp, String> {
-    let mut inf = Infer::new();
-    let f = inf.fresh();
-    let te = inf.infer(e, f)?;
-    inf.solve()?;
-    Ok(inf.substitute_texp(te))
 }
 
 fn infer_exprs(es: Vec<Exp>) -> (Vec<TExp>, String) {
@@ -976,22 +946,9 @@ fn main() {
     //     None
     // )];
 
-    /*
-    let f = \x -> if x == 0 then 1 else x * f(x - 1);
-    let a = f(5);
-    */
+    // def a = def b = 10;
     let es = vec![
-        define!("f", None,
-            lambda!("x" =>
-                if_!(binary!(BinaryOp::Eq, ident!("x"), num!(0.0)),
-                    num!(1.0),
-                    binary!(BinaryOp::Add,
-                        ident!("x"),
-                        call!(ident!("f"),
-                            binary!(BinaryOp::Add, ident!("x"), num!(1.0))))
-                ),
-                None)),
-        define!("a", None, call!(ident!("f"), num!(5.0))),
+        define!("a", None, define!("b", None, num!(10.0))),
     ];
 
     let start = std::time::Instant::now();
