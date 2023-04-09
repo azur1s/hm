@@ -30,6 +30,11 @@ enum Exp {
         value: Box<Self>,
         body: Box<Self>,
     },
+    If {
+        cond: Box<Self>,
+        t: Box<Self>,
+        f: Box<Self>,
+    },
 }
 
 impl std::fmt::Display for Exp {
@@ -91,6 +96,9 @@ impl std::fmt::Display for Exp {
                 }
                 write!(f, " = {value} in {body}")
             },
+            If { cond, t, f: fb } => {
+                write!(f, "if {cond} then {t} else {fb}")
+            },
         }
     }
 }
@@ -119,6 +127,12 @@ enum TExp {
         ty: Type,
         value: Box<Self>,
         body: Box<Self>,
+    },
+    If {
+        cond: Box<Self>,
+        t: Box<Self>,
+        f: Box<Self>,
+        ret: Type,
     },
 }
 
@@ -165,6 +179,9 @@ impl std::fmt::Display for TExp {
             },
             Let { name, ty, value, body } => {
                 write!(f, "let {name}: {ty} = {value} in {body}")
+            },
+            If { cond, t, f: fb, .. } => {
+                write!(f, "if {cond} then {t} else {fb}")
             },
         }
     }
@@ -446,6 +463,17 @@ impl Infer {
                     body: Box::new(bt),
                 }
             },
+            If { cond, t, f, ret } => {
+                let ct = self.substitute_texp(*cond);
+                let tt = self.substitute_texp(*t);
+                let ft = self.substitute_texp(*f);
+                If {
+                    cond: Box::new(ct),
+                    t: Box::new(tt),
+                    f: Box::new(ft),
+                    ret: self.substitute(ret),
+                }
+            },
         }
     }
 
@@ -591,6 +619,17 @@ impl Infer {
                     body: Box::new(bt),
                 })
             },
+            If { cond, t, f } => {
+                let ct = self.infer(*cond, Type::Bool)?;
+                let tt = self.infer(*t, expected.clone())?;
+                let et = self.infer(*f, expected.clone())?;
+                Ok(TExp::If {
+                    cond: Box::new(ct),
+                    t: Box::new(tt),
+                    f: Box::new(et),
+                    ret: expected,
+                })
+            },
         }
     }
 
@@ -611,6 +650,7 @@ impl Infer {
             TExp::Lambda { ret, .. } => Ok(ret),
             TExp::Define { ty, .. } => Ok(ty),
             TExp::Let { ty, .. } => Ok(ty),
+            TExp::If { ret, .. } => Ok(ret),
         }
     }
 }
@@ -633,7 +673,7 @@ fn infer_exprs(es: Vec<Exp>) -> (Vec<TExp>, String) {
     let mut errs = vec![];
     for e in es {
         let f = inf.fresh();
-        let t = inf.infer(e, f).expect("Infer failed");
+        let t = inf.infer(e, f).unwrap();
         tes.push(Some(t.clone()));
         tes_nosub.push(t.clone());
 
@@ -874,6 +914,16 @@ macro_rules! let_ {
     };
 }
 
+macro_rules! if_ {
+    ($cond:expr, $t:expr, $f:expr) => {
+        Exp::If {
+            cond: Box::new($cond),
+            t: Box::new($t),
+            f: Box::new($f),
+        }
+    };
+}
+
 fn main() {
     /*
     let id = \x -> x;
@@ -921,10 +971,28 @@ fn main() {
     // ];
 
     // \w x y z -> w(x(y), z);
-    let es = vec![lambda!("w", "x", "y", "z" =>
-        call!(ident!("w"), call!(ident!("x"), ident!("y")), ident!("z")),
-        None
-    )];
+    // let es = vec![lambda!("w", "x", "y", "z" =>
+    //     call!(ident!("w"), call!(ident!("x"), ident!("y")), ident!("z")),
+    //     None
+    // )];
+
+    /*
+    let f = \x -> if x == 0 then 1 else x * f(x - 1);
+    let a = f(5);
+    */
+    let es = vec![
+        define!("f", None,
+            lambda!("x" =>
+                if_!(binary!(BinaryOp::Eq, ident!("x"), num!(0.0)),
+                    num!(1.0),
+                    binary!(BinaryOp::Add,
+                        ident!("x"),
+                        call!(ident!("f"),
+                            binary!(BinaryOp::Add, ident!("x"), num!(1.0))))
+                ),
+                None)),
+        define!("a", None, call!(ident!("f"), num!(5.0))),
+    ];
 
     let start = std::time::Instant::now();
     let (tes, e) = infer_exprs(es.clone());
