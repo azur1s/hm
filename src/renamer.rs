@@ -1,10 +1,15 @@
 use crate::exp::{TExp, Type};
 
+/// A renamer to rename type variables to a "minimized" form for more readable output
+///
+///     \(x: '4) (y: '2): '4 => \(x: '0) (y: '1): '0
+///     \(f: ('9 -> '15)) (a: '14): '15 => \(f: ('0 -> '1)) (a: '2): '1
+///
 pub struct Renamer {
     // Type variables encountered so far
     // We can use it as a mapping by using the index of the
     // vector as key
-    // e.g. fn (x: '4, y: '2): '4 = ..
+    // e.g. \(x: '4) (y: '2): '4
     //      [4, 2] so vars[0] is 4 and vars[1] is 2
     vars: Vec<usize>,
 }

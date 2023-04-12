@@ -3,11 +3,11 @@ use crate::{renamer::Renamer, exp::{BinaryOp, Exp, TExp, Type, itoa}};
 
 #[derive(Clone, Debug)]
 struct Infer {
-    // Substitution [$0 => T, $1 => U, ...]
+    // List of substitutions ($0 => T, $1 => U, ...)
     subst: Vec<Type>,
-    // Type constraints [T = U, U = V, ...]
+    // List of type constraints (T = U, U = V, ...)
     constraints: Vec<(Type, Type)>,
-    // Environment
+    // Type environment
     env: HashMap<String, Type>,
 }
 
@@ -20,16 +20,24 @@ impl Infer {
         }
     }
 
+    /// Generate a fresh type variable
     fn fresh(&mut self) -> Type {
         let i = self.subst.len();
         self.subst.push(Type::Var(i));
         Type::Var(i)
     }
 
+    /// Get a substitution for a type variable
     fn subst(&self, i: usize) -> Option<Type> {
         self.subst.get(i).cloned()
     }
 
+    /// Check if a type variable occurs in a type
+    ///
+    ///     occurs('a, ('a -> 'b)) -> true
+    ///     occurs('c, ('a -> 'b)) -> false
+    ///     occurs('a, Num)        -> false
+    ///
     fn occurs(&self, i: usize, t: Type) -> bool {
         use Type::*;
         match t {
@@ -51,6 +59,11 @@ impl Infer {
         }
     }
 
+    /// Unify two types
+    /// Unify is the process of finding a substitution that makes two types equal
+    ///
+    ///     unify('a, Num) -> 'a = Num
+    ///
     fn unify(&mut self, t1: Type, t2: Type) -> Result<(), String> {
         use Type::*;
         match (t1, t2) {
@@ -58,7 +71,7 @@ impl Infer {
             (Num, Num) | (Bool, Bool) | (Unit, Unit) => Ok(()),
 
             // Variable
-            (Var(i), Var(j)) if i == j => Ok(()),
+            (Var(i), Var(j)) if i == j => Ok(()), // Same variables can be unified
             (Var(i), t2) => {
                 // If the substitution is not the variable itself,
                 // unify the substitution with t2
@@ -90,12 +103,15 @@ impl Infer {
 
             // Function
             (Fun { args: a1, ret: r1 }, Fun { args: a2, ret: r2 }) => {
+                // Check the number of arguments
                 if a1.len() != a2.len() {
                     return Err(format!("Function argument mismatch: {} != {}", a1.len(), a2.len()));
                 }
+                // Unify the arguments
                 for (a1, a2) in a1.into_iter().zip(a2.into_iter()) {
                     self.unify(a1, a2)?;
                 }
+                // Unify the return types
                 self.unify(*r1, *r2)
             },
 
@@ -121,6 +137,7 @@ impl Infer {
         }
     }
 
+    /// Solve the constraints by unifying them
     fn solve(&mut self) -> Result<(), String> {
         // Unify the constraints
         for (t1, t2) in self.constraints.clone().into_iter() {
@@ -129,6 +146,11 @@ impl Infer {
         Ok(())
     }
 
+    /// Substitute the type variables with the substitutions
+    ///
+    ///     substitute(['a -> Num], 'a) -> Num
+    ///     substitute(['a -> 'b], 'a)  -> 'b
+    ///
     fn substitute(&mut self, t: Type) -> Type {
         use Type::*;
         match t {
@@ -165,6 +187,7 @@ impl Infer {
         }
     }
 
+    /// Find a type variable in (typed) expression and substitute them
     fn substitute_texp(&mut self, e: TExp) -> TExp {
         use TExp::*;
         match e {
@@ -214,15 +237,30 @@ impl Infer {
                     body: Box::new(bt),
                 }
             },
+            If { cond, t, f, ret } => {
+                let ct = self.substitute_texp(*cond);
+                let tt = self.substitute_texp(*t);
+                let ft = self.substitute_texp(*f);
+                If {
+                    cond: Box::new(ct),
+                    t: Box::new(tt),
+                    f: Box::new(ft),
+                    ret: self.substitute(ret),
+                }
+            },
         }
     }
 
+    /// Infer the type of an expression
     fn infer(&mut self,
         e: Exp,
         expected: Type,
     ) -> Result<TExp, String> {
         use Exp::*;
         match e {
+            // Literal values
+            // Push the constraint (expected type to be the literal type) and
+            // return the typed expression
             Num(x) => {
                 self.constraints.push((expected, Type::Num));
                 Ok(TExp::Num(x))
@@ -236,26 +274,37 @@ impl Infer {
                 Ok(TExp::Unit)
             },
 
+            // Identifiers
+            // The same as literals but the type is looked up in the environment
             Ident(ref x) => {
                 let t = self.env.get(x).ok_or(format!("Unbound variable: {}", x))?;
                 self.constraints.push((expected, t.clone()));
                 Ok(TExp::Ident(x.clone()))
             }
 
+            // Binary operators
+            // The type of the left and right hand side are inferred and
+            // the expected type is determined by the operator
             Binary(op, lhs, rhs) => match op {
+                // Numeric operators
                 BinaryOp::Add => {
                     let lt = self.infer(*lhs, Type::Num)?;
                     let rt = self.infer(*rhs, Type::Num)?;
                     self.constraints.push((expected, Type::Num));
                     Ok(TExp::Binary(op, Box::new(lt), Box::new(rt), Type::Num))
                 },
+                // Boolean operators
                 BinaryOp::And => {
                     let lt = self.infer(*lhs, Type::Bool)?;
                     let rt = self.infer(*rhs, Type::Bool)?;
                     self.constraints.push((expected, Type::Bool));
                     Ok(TExp::Binary(op, Box::new(lt), Box::new(rt), Type::Bool))
                 },
+                // 'a -> 'a -> 'a operators
                 BinaryOp::Eq => {
+                    // Create a fresh type variable and then use it as the
+                    // expected type for both the left and right hand side
+                    // so the type on both side have to be the same
                     let t = self.fresh();
                     let lt = self.infer(*lhs, t.clone())?;
                     let rt = self.infer(*rhs, t)?;
@@ -264,6 +313,7 @@ impl Infer {
                 },
             }
 
+            // Application or function call
             Call { func, args } => {
                 // Generate fresh types for the arguments
                 let freshes = args.clone().into_iter()
@@ -287,9 +337,11 @@ impl Infer {
                     args: xs,
                 })
             },
+            // Lambda
             Lambda { args, ret, body } => {
+                // Get the return type or create a fresh type variable
                 let rt = ret.unwrap_or(self.fresh());
-                // Fill in the type of the arguments
+                // Fill in the type of the arguments with a fresh type
                 let xs = args.into_iter()
                     .map(|(x, t)| (x, t.unwrap_or(self.fresh())))
                     .collect::<Vec<(String, Type)>>();
@@ -297,15 +349,13 @@ impl Infer {
                 // Create a new environment, and add the arguments to it
                 // and use the new environment to infer the body
                 let mut env = self.env.clone();
-                xs.clone().into_iter().for_each(|(x, t)| {
-                    env.insert(x, t);
-                });
-
+                xs.clone().into_iter().for_each(|(x, t)| { env.insert(x, t); });
                 let mut inf = self.clone();
                 inf.env = env;
                 let bt = inf.infer(*body, rt.clone())?;
 
                 // Add the substitutions & constraints from the body
+                // if it doesn't already exist
                 for s in inf.subst {
                     if !self.subst.contains(&s) {
                         self.subst.push(s);
@@ -331,23 +381,31 @@ impl Infer {
                     ret: rt,
                 })
             },
+            // Define (or let expression without a body)
             Define { name, ty, value } => {
                 let t = ty.unwrap_or(self.fresh());
                 let vt = self.infer(*value, t.clone())?;
                 self.env.insert(name.clone(), t.clone());
+
+                // Define always returns unit
+                self.constraints.push((expected, Type::Unit));
+
                 Ok(TExp::Define {
                     name,
                     ty: t,
                     value: Box::new(vt),
                 })
             },
+            // A let expression
             Let { name, ty, value, body } => {
+                // Infer the type of the value
                 let t = ty.unwrap_or(self.fresh());
                 let vt = self.infer(*value, t.clone())?;
 
+                // Create a new environment and add the binding to it
+                // and then use the new environment to infer the body
                 let mut env = self.env.clone();
                 env.insert(name.clone(), t.clone());
-
                 let mut inf = Infer::new();
                 inf.env = env;
                 let bt = inf.infer(*body, expected)?;
@@ -359,10 +417,27 @@ impl Infer {
                     body: Box::new(bt),
                 })
             },
+            // If expression
+            If { cond, t, f } => {
+                // Condition has to be a boolean
+                let ct = self.infer(*cond, Type::Bool)?;
+                // The type of the if expression is the same as the
+                // expected type
+                let tt = self.infer(*t, expected.clone())?;
+                let et = self.infer(*f, expected.clone())?;
+
+                Ok(TExp::If {
+                    cond: Box::new(ct),
+                    t: Box::new(tt),
+                    f: Box::new(et),
+                    ret: expected,
+                })
+            },
         }
     }
 }
 
+/// Infer a list of expressions
 pub fn infer_exprs(es: Vec<Exp>) -> (Vec<TExp>, String) {
     let mut inf = Infer::new();
     // Typed expressions
@@ -371,9 +446,10 @@ pub fn infer_exprs(es: Vec<Exp>) -> (Vec<TExp>, String) {
     let mut tes_nosub = vec![];
     // Errors
     let mut errs = vec![];
+
     for e in es {
         let f = inf.fresh();
-        let t = inf.infer(e, f).expect("Infer failed");
+        let t = inf.infer(e, f).unwrap();
         tes.push(Some(t.clone()));
         tes_nosub.push(t.clone());
 
@@ -394,6 +470,7 @@ pub fn infer_exprs(es: Vec<Exp>) -> (Vec<TExp>, String) {
     }
 
     // Union typed expressions, replacing None with the typed expression without substitutions
+    // None means that the expression has an error
     let mut tes_union = vec![];
     for (te, te_nosub) in tes.into_iter().zip(tes_nosub.into_iter()) {
         match te {
@@ -406,11 +483,8 @@ pub fn infer_exprs(es: Vec<Exp>) -> (Vec<TExp>, String) {
         }
     }
 
-    let mut r = Renamer::new();
-    let t = r.process(tes_union);
-
     (
-        t,
+        Renamer::new().process(tes_union),
         errs.join("\n")
     )
 }

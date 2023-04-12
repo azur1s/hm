@@ -3,6 +3,7 @@ pub enum BinaryOp {
     Add, And, Eq
 }
 
+/// A list of untyped expressions
 #[derive(Clone, Debug)]
 pub enum Exp {
     Num(f64), Bool(bool), Unit,
@@ -28,6 +29,11 @@ pub enum Exp {
         value: Box<Self>,
         body: Box<Self>,
     },
+    If {
+        cond: Box<Self>,
+        t: Box<Self>,
+        f: Box<Self>,
+    },
 }
 
 impl std::fmt::Display for Exp {
@@ -52,24 +58,21 @@ impl std::fmt::Display for Exp {
                 }
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        write!(f, " ")?;
                     }
                     write!(f, "{arg}")?;
                 }
                 write!(f, ")")
             },
             Lambda { args, ret, body } => {
-                write!(f, "fn (")?;
+                write!(f, "\\")?;
                 for (i, (arg, ty)) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
+                    if i > 0 { write!(f, " ")?; }
                     write!(f, "{arg}")?;
                     if let Some(ty) = ty {
                         write!(f, ": {ty}")?;
                     }
                 }
-                write!(f, ")")?;
                 if let Some(ret) = ret {
                     write!(f, ": {ret}")?;
                 }
@@ -89,10 +92,14 @@ impl std::fmt::Display for Exp {
                 }
                 write!(f, " = {value} in {body}")
             },
+            If { cond, t, f: fb } => {
+                write!(f, "if {cond} then {t} else {fb}")
+            },
         }
     }
 }
 
+/// A list of typed expressions
 #[derive(Clone, Debug)]
 pub enum TExp {
     Num(f64), Bool(bool), Unit,
@@ -118,6 +125,12 @@ pub enum TExp {
         value: Box<Self>,
         body: Box<Self>,
     },
+    If {
+        cond: Box<Self>,
+        t: Box<Self>,
+        f: Box<Self>,
+        ret: Type,
+    },
 }
 
 impl std::fmt::Display for TExp {
@@ -142,21 +155,19 @@ impl std::fmt::Display for TExp {
                 }
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        write!(f, " ")?;
                     }
                     write!(f, "{arg}")?;
                 }
                 write!(f, ")")
             },
             Lambda { args, ret, body } => {
-                write!(f, "fn (")?;
+                write!(f, "\\")?;
                 for (i, (arg, ty)) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{arg}: {ty}")?;
+                    if i > 0 { write!(f, " ")?; }
+                    write!(f, "({arg}: {ty})")?;
                 }
-                write!(f, "): {ret} -> {body}")
+                write!(f, ": {ret} -> {body}")
             },
             Define { name, ty, value } => {
                 write!(f, "let {name}: {ty} = {value}")
@@ -164,28 +175,39 @@ impl std::fmt::Display for TExp {
             Let { name, ty, value, body } => {
                 write!(f, "let {name}: {ty} = {value} in {body}")
             },
+            If { cond, t, f: fb, .. } => {
+                write!(f, "if {cond} then {t} else {fb}")
+            },
         }
     }
 }
 
+/// All possible types
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Type {
     // Literal types
     Num, Bool, Unit,
-    // '0, '1, ...
+    // An unbound variable type ('a, 'b etc.)
     Var(usize),
-    // (A*) -> B
+    // A function type (A -> B)
     Fun {
-        args: Vec<Self>, // A*
-        ret: Box<Self>, // B
+        args: Vec<Self>,
+        ret: Box<Self>,
     },
-    // T<A*>
+    // Constructor type (T<A>)
     Constructor {
-        name: String, // T
-        generics: Vec<Self>, // A*
+        name: String,
+        generics: Vec<Self>,
     },
 }
 
+/// Convert a number to a string of lowercase letters
+///
+///     0 -> a, 1 -> b, ... 24 -> y, 25 -> z,
+///     26 -> aa, 27 -> ab, ... 51 -> az, 52 -> ba, ...
+///
+/// This is to replace the type variable usize index
+/// with a string like in OCaml for readability
 pub fn itoa(i: usize) -> String {
     let mut s = String::new();
     let mut i = i;
@@ -210,11 +232,11 @@ impl std::fmt::Display for Type {
                 write!(f, "(")?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        write!(f, " ")?;
                     }
                     write!(f, "{arg}")?;
                 }
-                write!(f, ") -> {ret}")
+                write!(f, ") => {ret}")
             },
             Constructor { name, generics } => {
                 write!(f, "{name}")?;
