@@ -195,7 +195,8 @@ impl Infer {
             Binary(op, lhs, rhs, t) => {
                 let lt = self.substitute_texp(*lhs);
                 let rt = self.substitute_texp(*rhs);
-                Binary(op, Box::new(lt), Box::new(rt), t)
+                let tt = self.substitute(t);
+                Binary(op, Box::new(lt), Box::new(rt), tt)
             },
             Call { func, args } => {
                 let ft = self.substitute_texp(*func);
